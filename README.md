@@ -8,7 +8,17 @@ This is an automated delpoyment of the [kali-purple SOC](https://gitlab.com/kali
 
 ## Environment
 
-## Prerequisites
+for this deployment we are using 1 proxmox server with the following resources
+
+| hostname | cpu cores | ram | storage |
+|:--------:|:---------:|:---:|:-------:|
+|pve01|48|160 GB| 4.4 TB|
+
+## Requirements
+
+- terraform (>= 1.3.7)
+- ansible (core >= 2.13.8)
+- python (>= 3.8.10)
 
 ## deployment
 
