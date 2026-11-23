@@ -1,0 +1,73 @@
+---
+- name: Configure Filebeat to send tagged journal entries over TLS
+  ansible.builtin.template:
+    src: filebeat.yml.j2
+    dest: /etc/filebeat/filebeat.yml
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart Filebeat
+
+- name: Create the Filebeat secure settings store if necessary
+  ansible.builtin.command:
+    argv: [filebeat, keystore, create, --path.data, /var/lib/filebeat]
+    creates: /var/lib/filebeat/filebeat.keystore
+
+- name: Read the provisioned Filebeat secret checksum
+  ansible.builtin.stat:
+    path: /var/lib/filebeat/.lab-password.sha256
+    checksum_algorithm: sha256
+  register: lab_filebeat_checksum_file
+
+- name: List configured Filebeat secure settings
+  ansible.builtin.command:
+    argv: [filebeat, keystore, list, --path.data, /var/lib/filebeat]
+  changed_when: false
+  register: lab_filebeat_keystore
+
+- name: Put the narrowly scoped credential in the Filebeat keystore
+  ansible.builtin.command:
+    argv: [filebeat, keystore, add, LAB_FILEBEAT_PASSWORD, --stdin, --force, --path.data, /var/lib/filebeat]
+    stdin: "{{ lab_filebeat_password }}"
+  no_log: true
+  changed_when: true
+  register: lab_filebeat_password_update
+  vars:
+    lab_filebeat_checksum: "{{ lab_filebeat_password | hash('sha256') }}"
+  when: >-
+    'LAB_FILEBEAT_PASSWORD' not in lab_filebeat_keystore.stdout_lines or
+    lab_filebeat_checksum_file.stat.checksum | default('') != (lab_filebeat_checksum ~ '\n') | hash('sha256')
+  notify: Restart Filebeat
+
+- name: Record the installed Filebeat credential version
+  ansible.builtin.copy:
+    content: "{{ lab_filebeat_password | hash('sha256') }}\n"
+    dest: /var/lib/filebeat/.lab-password.sha256
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  diff: false
+  when: lab_filebeat_password_update.changed
+
+- name: Restrict Filebeat secure settings file permissions
+  ansible.builtin.file:
+    path: /var/lib/filebeat/filebeat.keystore
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Verify the Filebeat configuration and TLS connection
+  ansible.builtin.command:
+    argv: [filebeat, test, "{{ item }}", -c, /etc/filebeat/filebeat.yml, --path.data, /var/lib/filebeat]
+  loop: [config, output]
+  changed_when: false
+
+- name: Apply the Filebeat service configuration
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start Filebeat
+  ansible.builtin.systemd_service:
+    name: filebeat
+    enabled: true
+    state: started

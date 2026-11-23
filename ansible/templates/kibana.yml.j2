@@ -1,0 +1,14 @@
+# Managed for Elastic {{ lab_elastic_version }}.
+server.host: {{ lab_soc_management_ip | to_json }}
+server.port: 5601
+server.publicBaseUrl: {{ lab_kibana_url | to_json }}
+server.ssl.enabled: true
+server.ssl.certificate: /etc/kibana/lab-tls/service.crt
+server.ssl.key: /etc/kibana/lab-tls/service.key
+elasticsearch.hosts: [{{ lab_es_local_url | to_json }}]
+elasticsearch.username: kibana_system
+elasticsearch.ssl.verificationMode: full
+elasticsearch.ssl.certificateAuthorities: [/etc/kibana/lab-tls/ca.crt]
+xpack.security.secureCookies: true
+telemetry.enabled: false
+telemetry.optIn: false

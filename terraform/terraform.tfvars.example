@@ -1,0 +1,29 @@
+# Replace the Proxmox identifiers, VM IDs, and addresses with reserved lab values.
+# The Debian 12 amd64 Cloud-Init template is on this node and datastore.
+proxmox_api_url = "https://pve.example.test:8006/api2/json"
+proxmox_node    = "pve01"
+proxmox_pool    = "kali-purple-lab"
+vm_template     = "debian-12-cloudinit"
+proxmox_storage = "local-lvm"
+
+management_bridge = "vmbr10"
+lab_bridge        = "vmbr20"
+
+soc_vm_id              = 6101
+client_vm_id           = 6102
+soc_management_cidr    = "192.0.2.11/24"
+client_management_cidr = "192.0.2.12/24"
+soc_lab_cidr           = "198.51.100.11/24"
+client_lab_cidr        = "198.51.100.12/24"
+
+# Optional gateway and DNS for management-network updates.
+# management_gateway    = "192.0.2.1"
+# management_dns_servers = ["192.0.2.53"]
+
+# Uncomment and replace with a real public key or set TF_VAR_vm_ssh_public_key.
+# vm_ssh_public_key = "ssh-ed25519 ..."
+
+# name_prefix    = "training"
+# vm_user        = "ansible"
+# soc_vm_size    = { cores = 4, memory_mb = 8192, disk_gb = 80 }
+# client_vm_size = { cores = 1, memory_mb = 1024, disk_gb = 16 }

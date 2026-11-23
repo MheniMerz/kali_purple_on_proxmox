@@ -1,0 +1,176 @@
+---
+- name: Apply the lab Elasticsearch API configuration
+  module_defaults:
+    ansible.builtin.uri:
+      ca_path: "{{ lab_ca_path }}"
+      use_proxy: false
+      force_basic_auth: true
+      url_username: elastic
+      url_password: "{{ lab_elastic_password }}"
+  block:
+    - name: Test the persistent Elasticsearch administrator password
+      ansible.builtin.uri:
+        url: "{{ lab_es_local_url }}/_security/_authenticate"
+        status_code: [200, 401]
+      register: lab_es_admin_auth
+      until: lab_es_admin_auth.status in [200, 400, 401, 403]
+      retries: 18
+      delay: 5
+      no_log: true
+
+    - name: Initialize the persistent Elasticsearch administrator password
+      ansible.builtin.uri:
+        url: "{{ lab_es_local_url }}/_security/user/elastic/_password"
+        url_password: "{{ lab_bootstrap_password }}"
+        method: PUT
+        body_format: json
+        body:
+          password: "{{ lab_elastic_password }}"
+      no_log: true
+      changed_when: true
+      when: lab_es_admin_auth.status == 401
+
+    - name: Wait for the cluster to allocate its primary shards
+      ansible.builtin.uri:
+        url: "{{ lab_es_local_url }}/_cluster/health?wait_for_status=yellow&timeout=10s"
+      register: lab_es_cluster_health
+      until: lab_es_cluster_health.status == 200 and not lab_es_cluster_health.json.timed_out
+      retries: 18
+      delay: 5
+      no_log: true
+
+    - name: Remove the used bootstrap password from the Elasticsearch keystore
+      ansible.builtin.command:
+        argv: [/usr/share/elasticsearch/bin/elasticsearch-keystore, remove, bootstrap.password]
+      environment:
+        ES_PATH_CONF: /etc/elasticsearch
+      changed_when: true
+      when: "'bootstrap.password' in lab_es_keystore.stdout_lines or lab_es_bootstrap_setting.changed"
+      register: lab_es_bootstrap_removal
+
+    - name: Restore restricted permissions after the keystore rewrite
+      ansible.builtin.file:
+        path: /etc/elasticsearch/elasticsearch.keystore
+        owner: root
+        group: elasticsearch
+        mode: "0640"
+      when: lab_es_bootstrap_removal.changed
+
+    - name: Test the Kibana system account
+      ansible.builtin.uri:
+        url: "{{ lab_es_local_url }}/_security/_authenticate"
+        url_username: kibana_system
+        url_password: "{{ lab_kibana_password }}"
+        status_code: [200, 401]
+      register: lab_es_kibana_auth
+      no_log: true
+
+    - name: Set the Kibana system account password
+      ansible.builtin.uri:
+        url: "{{ lab_es_local_url }}/_security/user/kibana_system/_password"
+        method: PUT
+        body_format: json
+        body:
+          password: "{{ lab_kibana_password }}"
+      no_log: true
+      changed_when: true
+      when: lab_es_kibana_auth.status == 401
+
+    - name: Read the existing Filebeat role
+      ansible.builtin.uri:
+        url: "{{ lab_es_local_url }}/_security/role/lab_filebeat_writer"
+        status_code: [200, 404]
+      register: lab_es_shipper_role
+      no_log: true
+
+    - name: Restrict Filebeat to creating documents in the lab log indexes
+      ansible.builtin.uri:
+        url: "{{ lab_es_local_url }}/_security/role/lab_filebeat_writer"
+        method: PUT
+        body_format: json
+        body: "{{ lab_filebeat_role }}"
+      no_log: true
+      changed_when: true
+      vars:
+        lab_existing_role: "{{ lab_es_shipper_role.json.get('lab_filebeat_writer', {}) }}"
+      when: >-
+        lab_es_shipper_role.status == 404 or
+        lab_existing_role.cluster != lab_filebeat_role.cluster or
+        lab_existing_role.indices | length != 1 or
+        lab_existing_role.indices[0].names != lab_filebeat_role.indices[0].names or
+        lab_existing_role.indices[0].privileges | sort != lab_filebeat_role.indices[0].privileges | sort or
+        lab_existing_role.indices[0].allow_restricted_indices | default(false) or
+        lab_existing_role.applications | default([]) | length > 0 or
+        lab_existing_role.run_as | default([]) | length > 0
+
+    - name: Check the log shipper credentials and role
+      ansible.builtin.uri:
+        url: "{{ lab_es_local_url }}/_security/_authenticate"
+        url_username: "{{ lab_filebeat_user }}"
+        url_password: "{{ lab_filebeat_password }}"
+        status_code: [200, 401]
+      register: lab_es_shipper_auth
+      no_log: true
+
+    - name: Configure the dedicated log shipper user
+      ansible.builtin.uri:
+        url: "{{ lab_es_local_url }}/_security/user/{{ lab_filebeat_user | urlencode }}"
+        method: PUT
+        body_format: json
+        body:
+          password: "{{ lab_filebeat_password }}"
+          roles: [lab_filebeat_writer]
+          enabled: true
+      no_log: true
+      changed_when: true
+      when: lab_es_shipper_auth.status == 401 or lab_es_shipper_auth.json.roles != ['lab_filebeat_writer']
+
+    - name: Read the lab index retention policy
+      ansible.builtin.uri:
+        url: "{{ lab_es_local_url }}/_ilm/policy/{{ lab_log_template_name }}"
+        status_code: [200, 404]
+      register: lab_es_retention_policy
+      no_log: true
+
+    - name: Set automatic expiry for the lab's daily source indexes
+      ansible.builtin.uri:
+        url: "{{ lab_es_local_url }}/_ilm/policy/{{ lab_log_template_name }}"
+        method: PUT
+        body_format: json
+        body:
+          policy:
+            phases:
+              delete:
+                min_age: "{{ lab_log_retention_days }}d"
+                actions:
+                  delete: {}
+      no_log: true
+      changed_when: true
+      when: >-
+        lab_es_retention_policy.status == 404 or
+        lab_es_retention_policy.json[lab_log_template_name].policy.phases.delete.min_age | default('') != lab_log_retention_days ~ 'd'
+
+    - name: Read the lab index template
+      ansible.builtin.uri:
+        url: "{{ lab_es_local_url }}/_index_template/{{ lab_log_template_name }}"
+        status_code: [200, 404]
+      register: lab_es_index_template
+      no_log: true
+
+    - name: Install the lab index template
+      ansible.builtin.uri:
+        url: "{{ lab_es_local_url }}/_index_template/{{ lab_log_template_name }}"
+        method: PUT
+        body_format: json
+        body: "{{ lab_log_template }}"
+      no_log: true
+      changed_when: true
+      vars:
+        lab_existing_template: "{{ lab_es_index_template.json.index_templates[0].index_template }}"
+      when: >-
+        lab_es_index_template.status == 404 or
+        lab_existing_template.index_patterns != lab_log_template.index_patterns or
+        lab_existing_template.priority != lab_log_template.priority or
+        lab_existing_template.version | default(0) != lab_log_template.version or
+        lab_existing_template.template.settings != lab_log_template.template.settings or
+        lab_existing_template.template.mappings != lab_log_template.template.mappings

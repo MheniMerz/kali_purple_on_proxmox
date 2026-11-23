@@ -1,0 +1,111 @@
+---
+- name: Validate the lab inventory
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Check the Terraform inventory
+      ansible.builtin.import_tasks: tasks/inventory.yml
+
+- name: Verify client ingestion and the Kali Purple lab detection
+  hosts: lab_clients
+  gather_facts: false
+  vars_files:
+    - vars/lab_detection.yml
+  vars:
+    lab_smoke_alert_alias: .alerts-security.alerts-default
+  tasks:
+    - name: Generate a unique identifier for this verification run
+      ansible.builtin.set_fact:
+        lab_smoke_id: "{{ lookup('ansible.builtin.password', '/dev/null', length=24, chars=['ascii_lowercase', 'digits']) }}"
+
+    - name: Write control and positive messages to the client's journal
+      ansible.builtin.command:
+        argv:
+          - logger
+          - --tag
+          - "{{ lab_journal_tag }}"
+          - --
+          - "kali-purple-smoke-{{ item }} {{ lab_smoke_id }}"
+      loop: [control, positive]
+      changed_when: true
+
+    - name: Check the indexed events and alert from the SOC VM
+      delegate_to: "{{ groups['soc'][0] }}"
+      module_defaults:
+        ansible.builtin.uri:
+          method: POST
+          body_format: json
+          ca_path: "{{ lab_ca_path }}"
+          url_username: elastic
+          url_password: "{{ lab_elastic_password }}"
+          force_basic_auth: true
+          follow_redirects: none
+          use_proxy: false
+      block:
+        - name: Wait up to two minutes for each message to be indexed
+          ansible.builtin.uri:
+            url: "{{ lab_es_url }}/{{ lab_log_index_pattern }}/_count"
+            status_code: [200, 404]
+            body:
+              query:
+                bool:
+                  filter:
+                    - match_phrase:
+                        message: "kali-purple-smoke-{{ item }} {{ lab_smoke_id }}"
+                    - exists:
+                        field: host.name
+                    - exists:
+                        field: '@timestamp'
+          loop: [control, positive]
+          register: lab_smoke_events
+          until: lab_smoke_events.status == 200 and lab_smoke_events.json.count > 0
+          retries: 30
+          delay: 4
+          no_log: true
+
+        - name: Wait up to two minutes for a positive detection alert
+          ansible.builtin.uri:
+            url: "{{ lab_es_url }}/{{ lab_smoke_alert_alias }}/_count"
+            body:
+              query:
+                bool:
+                  filter:
+                    - term:
+                        kibana.alert.rule.rule_id: "{{ lab_detection_rule.rule_id }}"
+                    - match_phrase:
+                        message: "kali-purple-smoke-positive {{ lab_smoke_id }}"
+          register: lab_smoke_positive
+          until: lab_smoke_positive.status == 200 and lab_smoke_positive.json.count > 0
+          retries: 30
+          delay: 4
+          no_log: true
+
+        - name: Count detections for the control message
+          ansible.builtin.uri:
+            url: "{{ lab_es_url }}/{{ lab_smoke_alert_alias }}/_count"
+            body:
+              query:
+                bool:
+                  filter:
+                    - term:
+                        kibana.alert.rule.rule_id: "{{ lab_detection_rule.rule_id }}"
+                    - match_phrase:
+                        message: "kali-purple-smoke-control {{ lab_smoke_id }}"
+          register: lab_smoke_control
+          no_log: true
+
+        - name: Check for exactly one positive alert and no control alert
+          ansible.builtin.assert:
+            that:
+              - lab_smoke_positive.json.count == 1
+              - lab_smoke_control.json.count == 0
+            success_msg: "Both messages for {{ lab_smoke_id }} were indexed. The positive message raised one alert."
+            fail_msg: "Expected one positive alert and zero control alerts for {{ lab_smoke_id }}."
+      rescue:
+        - name: Report the failing verification step
+          ansible.builtin.fail:
+            msg: >-
+              {{ ansible_failed_task.name }} failed for {{ lab_smoke_id }}. Check the client's
+              {{ lab_journal_tag }} journal and Filebeat service, then the Kibana rule and its execution history.

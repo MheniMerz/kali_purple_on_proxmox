@@ -1,0 +1,83 @@
+---
+- name: Load the lab detection definition
+  ansible.builtin.include_vars: "{{ playbook_dir }}/vars/lab_detection.yml"
+
+- name: Configure the lab detection in Kibana
+  module_defaults:
+    ansible.builtin.uri:
+      ca_path: "{{ lab_ca_path }}"
+      url_username: elastic
+      url_password: "{{ lab_elastic_password }}"
+      force_basic_auth: true
+      follow_redirects: none
+      use_proxy: false
+      headers:
+        kbn-xsrf: kali-purple-lab
+  vars:
+    lab_detection_endpoint: "{{ lab_kibana_url }}/api/detection_engine"
+    lab_data_view_endpoint: "{{ lab_kibana_url }}/api/data_views/data_view"
+    lab_data_view_id: kali-purple-lab
+  no_log: true
+  block:
+    - name: Check the default space for a detection alerts index
+      ansible.builtin.uri:
+        url: "{{ lab_detection_endpoint }}/index"
+        status_code: [200, 404]
+      register: lab_detection_index
+
+    - name: Initialize the detection alerts index
+      ansible.builtin.uri:
+        url: "{{ lab_detection_endpoint }}/index"
+        method: POST
+      when: lab_detection_index.status == 404
+      changed_when: true
+
+    - name: Read the project-managed detection rule
+      ansible.builtin.uri:
+        url: "{{ lab_detection_endpoint }}/rules?rule_id={{ lab_detection_rule.rule_id }}"
+        status_code: [200, 404]
+      register: lab_detection_existing
+
+    - name: Create the project-managed detection rule
+      ansible.builtin.uri:
+        url: "{{ lab_detection_endpoint }}/rules"
+        method: POST
+        body_format: json
+        body: "{{ lab_detection_rule }}"
+      when: lab_detection_existing.status == 404
+      changed_when: true
+
+    - name: Update drift in the project-managed detection rule
+      ansible.builtin.uri:
+        url: "{{ lab_detection_endpoint }}/rules"
+        method: PATCH
+        body_format: json
+        body: "{{ lab_detection_rule }}"
+      when:
+        - lab_detection_existing.status == 200
+        - >-
+          lab_detection_existing.json | dict2items
+          | selectattr('key', 'in', lab_detection_rule.keys()) | items2dict
+          != lab_detection_rule
+      changed_when: true
+
+    - name: Check for the lab data view in Discover
+      ansible.builtin.uri:
+        url: "{{ lab_data_view_endpoint }}/{{ lab_data_view_id }}"
+        status_code: [200, 404]
+      register: lab_detection_data_view
+
+    - name: Create the lab data view in Discover
+      ansible.builtin.uri:
+        url: "{{ lab_data_view_endpoint }}"
+        method: POST
+        body_format: json
+        body:
+          data_view:
+            id: "{{ lab_data_view_id }}"
+            name: Kali Purple lab logs
+            title: "{{ lab_log_index_pattern }}"
+            timeFieldName: '@timestamp'
+            allowNoIndex: true
+      when: lab_detection_data_view.status == 404
+      changed_when: true

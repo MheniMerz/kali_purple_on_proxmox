@@ -1,0 +1,94 @@
+---
+- name: Install Kibana TLS assets
+  ansible.builtin.import_tasks: service_tls.yml
+  vars:
+    lab_tls_service: kibana
+    lab_tls_restart_handler: Restart Kibana
+
+- name: Configure the management-only Kibana listener
+  ansible.builtin.template:
+    src: kibana.yml.j2
+    dest: /etc/kibana/kibana.yml
+    owner: root
+    group: kibana
+    mode: "0640"
+  notify: Restart Kibana
+
+- name: Configure Kibana secure settings
+  environment:
+    KBN_PATH_CONF: /etc/kibana
+  vars:
+    lab_kibana_secure_settings:
+      - name: elasticsearch.password
+        value: "{{ lab_kibana_password }}"
+      - name: xpack.encryptedSavedObjects.encryptionKey
+        value: "{{ lookup('ansible.builtin.password', lab_secrets_dir ~ '/kibana-objects', length=48, chars=['ascii_letters', 'digits']) }}"
+      - name: xpack.security.encryptionKey
+        value: "{{ lookup('ansible.builtin.password', lab_secrets_dir ~ '/kibana-session', length=48, chars=['ascii_letters', 'digits']) }}"
+      - name: xpack.reporting.encryptionKey
+        value: "{{ lookup('ansible.builtin.password', lab_secrets_dir ~ '/kibana-reporting', length=48, chars=['ascii_letters', 'digits']) }}"
+  block:
+    - name: Create the Kibana secure settings store if necessary
+      ansible.builtin.command:
+        argv: [/usr/share/kibana/bin/kibana-keystore, create]
+        creates: /etc/kibana/kibana.keystore
+
+    - name: List existing Kibana secure settings
+      ansible.builtin.command:
+        argv: [/usr/share/kibana/bin/kibana-keystore, list]
+      changed_when: false
+      register: lab_kibana_keystore
+
+    - name: Compare configured Kibana secure settings to local values
+      ansible.builtin.command:
+        argv: [/usr/share/kibana/bin/kibana-keystore, show, "{{ item.name }}"]
+      loop: "{{ lab_kibana_secure_settings }}"
+      when: item.name in lab_kibana_keystore.stdout_lines
+      register: lab_kibana_current_settings
+      changed_when: false
+      no_log: true
+
+    - name: Store the system account password and persistent encryption keys
+      ansible.builtin.command:
+        argv: [/usr/share/kibana/bin/kibana-keystore, add, "{{ item.item.name }}", --stdin, --force]
+        stdin: "{{ item.item.value | to_json }}"
+      loop: "{{ lab_kibana_current_settings.results }}"
+      when: >-
+        item.skipped | default(false) or
+        item.stdout | trim not in [item.item.value, item.item.value | to_json]
+      changed_when: true
+      no_log: true
+      notify: Restart Kibana
+
+    - name: Restrict Kibana secure settings file permissions
+      ansible.builtin.file:
+        path: /etc/kibana/kibana.keystore
+        owner: root
+        group: kibana
+        mode: "0640"
+
+- name: Apply the Kibana service configuration
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start Kibana
+  ansible.builtin.systemd_service:
+    name: kibana
+    enabled: true
+    state: started
+
+- name: Wait for the authenticated Kibana API to become available
+  ansible.builtin.uri:
+    url: "{{ lab_kibana_url }}/api/status"
+    ca_path: "{{ lab_ca_path }}"
+    use_proxy: false
+    url_username: elastic
+    url_password: "{{ lab_elastic_password }}"
+    force_basic_auth: true
+    return_content: true
+  register: lab_kibana_status
+  until: >-
+    lab_kibana_status.status == 200 and
+    lab_kibana_status.json.status.overall.level == 'available'
+  retries: 90
+  delay: 5
+  no_log: true

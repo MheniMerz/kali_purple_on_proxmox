@@ -1,0 +1,11 @@
+---
+- name: Require the two lab inventory groups and SOC addresses
+  ansible.builtin.assert:
+    that:
+      - groups.get('soc', []) | length == 1
+      - groups.get('lab_clients', []) | length == 1
+      - groups['soc'][0] != groups['lab_clients'][0]
+      - hostvars[groups['soc'][0]].ansible_host is defined
+      - hostvars[groups['soc'][0]].lab_address is defined
+      - lab_soc_management_ip != lab_soc_lab_ip
+    fail_msg: Supply the Terraform inventory with one SOC host and one lab client.

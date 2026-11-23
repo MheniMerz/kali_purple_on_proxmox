@@ -1,0 +1,13 @@
+---
+- name: Wait for the provisioned SSH connection
+  ansible.builtin.wait_for_connection:
+    timeout: 300
+
+- name: Wait for Cloud-Init to configure the guest networking and users
+  ansible.builtin.command: cloud-init status --wait
+  async: 300
+  poll: 5
+  changed_when: false
+
+- name: Gather Debian guest facts
+  ansible.builtin.setup:

@@ -1,0 +1,26 @@
+# Managed for Elastic {{ lab_elastic_version }}.
+filebeat.inputs:
+  - type: journald
+    id: kali-purple-lab-journal
+    seek: head
+    include_matches.match:
+      - SYSLOG_IDENTIFIER={{ lab_journal_tag }}
+    processors:
+      - add_fields:
+          target: event
+          fields:
+            dataset: kali_purple_lab.journald
+
+processors:
+  - add_host_metadata:
+      netinfo.enabled: false
+
+setup.ilm.enabled: false
+setup.template.enabled: false
+output.elasticsearch:
+  hosts: [{{ lab_es_lab_url | to_json }}]
+  index: {{ lab_log_index | to_json }}
+  username: {{ lab_filebeat_user | to_json }}
+  password: "${LAB_FILEBEAT_PASSWORD}"
+  ssl.certificate_authorities: [{{ lab_ca_path | to_json }}]
+  ssl.verification_mode: full
