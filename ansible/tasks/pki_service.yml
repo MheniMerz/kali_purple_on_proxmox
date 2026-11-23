@@ -1,0 +1,45 @@
+---
+- name: Generate the service private key
+  community.crypto.openssl_privatekey:
+    path: "{{ lab_pki_dir }}/{{ lab_pki_service.name }}.key"
+    size: 3072
+    mode: "0600"
+
+- name: Prepare a signing request with all service addresses
+  community.crypto.openssl_csr:
+    path: "{{ lab_pki_dir }}/{{ lab_pki_service.name }}.csr"
+    privatekey_path: "{{ lab_pki_dir }}/{{ lab_pki_service.name }}.key"
+    common_name: "{{ lab_pki_service.name }}"
+    subject_alt_name: "{{ lab_pki_service.subject_alt_names }}"
+    use_common_name_for_san: false
+    basic_constraints: ["CA:FALSE"]
+    basic_constraints_critical: true
+    key_usage: [digitalSignature, keyEncipherment]
+    key_usage_critical: true
+    extended_key_usage: "{{ lab_pki_service.usages }}"
+    mode: "0600"
+
+- name: Check for an existing service certificate
+  ansible.builtin.stat:
+    path: "{{ lab_pki_dir }}/{{ lab_pki_service.name }}.crt"
+  register: lab_existing_certificate
+
+- name: Check the service certificate's renewal window
+  community.crypto.x509_certificate_info:
+    path: "{{ lab_pki_dir }}/{{ lab_pki_service.name }}.crt"
+    valid_at:
+      renewal: "+30d"
+  when: lab_existing_certificate.stat.exists
+  register: lab_certificate_validity
+
+- name: Issue or renew the service certificate
+  community.crypto.x509_certificate:
+    path: "{{ lab_pki_dir }}/{{ lab_pki_service.name }}.crt"
+    csr_path: "{{ lab_pki_dir }}/{{ lab_pki_service.name }}.csr"
+    ownca_path: "{{ lab_ca_local_path }}"
+    ownca_privatekey_path: "{{ lab_pki_dir }}/ca.key"
+    ownca_not_before: "-1d"
+    ownca_not_after: "+397d"
+    provider: ownca
+    force: "{{ not (lab_certificate_validity.valid_at.renewal | default(true)) }}"
+    mode: "0644"

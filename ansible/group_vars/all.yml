@@ -1,0 +1,65 @@
+---
+lab_elastic_version: "9.5.6"
+lab_es_heap: "2g"
+
+lab_runtime_dir: "{{ playbook_dir }}/.local"
+lab_pki_dir: "{{ lab_runtime_dir }}/pki"
+lab_secrets_dir: "{{ lab_runtime_dir }}/secrets"
+lab_ca_local_path: "{{ lab_pki_dir }}/ca.crt"
+lab_ca_path: /etc/kali-purple-lab/ca.crt
+lab_log_index_pattern: kali-purple-lab-*
+lab_log_index: "kali-purple-lab-%{+yyyy.MM.dd}"
+lab_log_template_name: kali-purple-lab-journald
+lab_log_retention_days: 7
+lab_journal_tag: kali-purple-lab
+
+lab_soc_host: "{{ groups['soc'][0] }}"
+lab_soc_management_ip: "{{ hostvars[lab_soc_host].ansible_host }}"
+lab_soc_lab_ip: "{{ hostvars[lab_soc_host].lab_address }}"
+lab_es_url: "https://{{ lab_soc_management_ip }}:9200"
+lab_es_local_url: https://127.0.0.1:9200
+lab_es_lab_url: "https://{{ lab_soc_lab_ip }}:9200"
+lab_kibana_url: "https://{{ lab_soc_management_ip }}:5601"
+
+lab_elastic_password: "{{ lookup('ansible.builtin.password', lab_secrets_dir ~ '/elastic', length=40, chars=['ascii_letters', 'digits']) }}"
+lab_bootstrap_password: "{{ lookup('ansible.builtin.password', lab_secrets_dir ~ '/elasticsearch-bootstrap', length=40, chars=['ascii_letters', 'digits']) }}"
+lab_kibana_password: "{{ lookup('ansible.builtin.password', lab_secrets_dir ~ '/kibana-system', length=40, chars=['ascii_letters', 'digits']) }}"
+lab_filebeat_user: lab_filebeat
+lab_filebeat_password: "{{ lookup('ansible.builtin.password', lab_secrets_dir ~ '/filebeat', length=40, chars=['ascii_letters', 'digits']) }}"
+
+lab_filebeat_role:
+  cluster:
+    - monitor
+  indices:
+    - names:
+        - "{{ lab_log_index_pattern }}"
+      privileges:
+        - auto_configure
+        - create_doc
+
+lab_log_template:
+  index_patterns:
+    - "{{ lab_log_index_pattern }}"
+  priority: 300
+  version: 1
+  template:
+    settings:
+      index:
+        number_of_shards: "1"
+        number_of_replicas: "0"
+        lifecycle:
+          name: "{{ lab_log_template_name }}"
+    mappings:
+      properties:
+        "@timestamp":
+          type: date
+        message:
+          type: text
+        host:
+          properties:
+            name:
+              type: keyword
+        event:
+          properties:
+            dataset:
+              type: keyword

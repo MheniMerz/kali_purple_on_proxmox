@@ -1,0 +1,31 @@
+---
+- name: Create the service's restricted TLS directory
+  ansible.builtin.file:
+    path: "/etc/{{ lab_tls_service }}/lab-tls"
+    state: directory
+    owner: root
+    group: "{{ lab_tls_service }}"
+    mode: "0750"
+
+- name: Install the service TLS certificate and private key
+  ansible.builtin.copy:
+    src: "{{ lab_pki_dir }}/{{ lab_tls_service }}.{{ item }}"
+    dest: "/etc/{{ lab_tls_service }}/lab-tls/service.{{ item }}"
+    owner: root
+    group: "{{ lab_tls_service }}"
+    mode: "0640"
+  loop:
+    - crt
+    - key
+  no_log: true
+  diff: false
+  notify: "{{ lab_tls_restart_handler }}"
+
+- name: Install the public trust anchor inside the service configuration directory
+  ansible.builtin.copy:
+    src: "{{ lab_ca_local_path }}"
+    dest: "/etc/{{ lab_tls_service }}/lab-tls/ca.crt"
+    owner: root
+    group: "{{ lab_tls_service }}"
+    mode: "0640"
+  notify: "{{ lab_tls_restart_handler }}"

@@ -1,0 +1,97 @@
+---
+- name: Check the guest platform
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.distribution == 'Debian'
+      - ansible_facts.distribution_major_version == '12'
+      - ansible_facts.architecture == 'x86_64'
+    fail_msg: This release uses Debian 12 amd64 Cloud-Init guests.
+
+- name: Create the apt keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the pinned Elastic repository signing key
+  ansible.builtin.get_url:
+    url: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+    checksum: sha256:db52809c5f6b27f9c2bed45cb43e398c659275f3d35305653c6750a0db90f5eb
+    dest: /etc/apt/keyrings/elastic.asc
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure the signed Elastic 9.x apt repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/kali-purple-lab-elastic.list
+    content: |
+      deb [arch=amd64 signed-by=/etc/apt/keyrings/elastic.asc] https://artifacts.elastic.co/packages/9.x/apt stable main
+    owner: root
+    group: root
+    mode: "0644"
+  register: lab_elastic_apt_source
+
+- name: Pin the lab's Elastic release for routine apt upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/preferences.d/kali-purple-lab-elastic
+    content: |
+      Package: elasticsearch kibana filebeat
+      Pin: version {{ lab_elastic_version }}
+      Pin-Priority: 1000
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Prepare the Elasticsearch configuration directory before installation
+  ansible.builtin.file:
+    path: /etc/elasticsearch
+    state: directory
+  when: inventory_hostname in groups['soc']
+
+- name: Prevent Debian package post-installation from generating a different security configuration
+  ansible.builtin.copy:
+    dest: /etc/elasticsearch/elasticsearch.yml
+    content: "xpack.security.autoconfiguration.enabled: false\n"
+    force: false
+    owner: root
+    group: root
+    mode: "0600"
+  when: inventory_hostname in groups['soc']
+
+- name: Install the Elastic packages without starting unconfigured services
+  ansible.builtin.apt:
+    name: "{{ lab_elastic_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: "{{ 0 if lab_elastic_apt_source.changed else 3600 }}"
+    policy_rc_d: 101
+    install_recommends: false
+
+- name: Restrict access to the installed Elasticsearch configuration directory
+  ansible.builtin.file:
+    path: /etc/elasticsearch
+    state: directory
+    owner: root
+    group: elasticsearch
+    mode: "2750"
+  when: inventory_hostname in groups['soc']
+
+- name: Create the shared trust directory
+  ansible.builtin.file:
+    path: "{{ lab_ca_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the lab's public CA certificate
+  ansible.builtin.copy:
+    src: "{{ lab_ca_local_path }}"
+    dest: "{{ lab_ca_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: "{{ lab_elastic_trust_handler }}"

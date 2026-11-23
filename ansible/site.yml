@@ -1,0 +1,82 @@
+---
+- name: Prepare controller credentials and TLS certificates
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Validate the lab inventory
+      ansible.builtin.import_tasks: tasks/inventory.yml
+
+    - name: Prepare local private storage
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0700"
+      loop:
+        - "{{ lab_runtime_dir }}"
+        - "{{ lab_pki_dir }}"
+        - "{{ lab_secrets_dir }}"
+
+    - name: Issue lab TLS certificates
+      ansible.builtin.import_tasks: tasks/pki.yml
+
+- name: Deploy the SOC VM
+  hosts: soc
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Wait for the SOC guest to complete its first boot
+      ansible.builtin.import_tasks: tasks/guest_ready.yml
+  tasks:
+    - name: Install the pinned Elastic server packages
+      ansible.builtin.import_tasks: tasks/elastic_packages.yml
+      vars:
+        lab_elastic_trust_handler: Restart Elasticsearch
+        lab_elastic_packages:
+          - "elasticsearch={{ lab_elastic_version }}"
+          - "kibana={{ lab_elastic_version }}"
+
+    - name: Configure Elasticsearch and its log writer
+      ansible.builtin.import_tasks: tasks/elasticsearch.yml
+
+    - name: Configure Kibana
+      ansible.builtin.import_tasks: tasks/kibana.yml
+
+    - name: Install the lab detection rule
+      ansible.builtin.import_tasks: tasks/lab_detection.yml
+
+  handlers:
+    - name: Restart Elasticsearch
+      ansible.builtin.systemd_service:
+        name: elasticsearch
+        state: restarted
+
+    - name: Restart Kibana
+      ansible.builtin.systemd_service:
+        name: kibana
+        state: restarted
+
+- name: Configure the lab client's log shipper
+  hosts: lab_clients
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Wait for the client guest to complete its first boot
+      ansible.builtin.import_tasks: tasks/guest_ready.yml
+  tasks:
+    - name: Install the pinned Filebeat package
+      ansible.builtin.import_tasks: tasks/elastic_packages.yml
+      vars:
+        lab_elastic_trust_handler: Restart Filebeat
+        lab_elastic_packages:
+          - "filebeat={{ lab_elastic_version }}"
+
+    - name: Configure Filebeat journald ingestion
+      ansible.builtin.import_tasks: tasks/filebeat.yml
+
+  handlers:
+    - name: Restart Filebeat
+      ansible.builtin.systemd_service:
+        name: filebeat
+        state: restarted

@@ -1,0 +1,16 @@
+---
+lab_detection_rule:
+  rule_id: kali-purple-lab-smoke
+  name: Kali Purple lab fixture
+  description: Detects the positive event emitted by the lab verification playbook.
+  type: query
+  language: kuery
+  index:
+    - "{{ lab_log_index_pattern }}"
+  query: 'message: "kali-purple-smoke-positive"'
+  interval: 1m
+  from: now-6m
+  to: now
+  severity: low
+  risk_score: 21
+  enabled: true

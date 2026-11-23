@@ -1,0 +1,21 @@
+# Managed for Elastic {{ lab_elastic_version }}.
+cluster.name: kali-purple-lab
+node.name: {{ inventory_hostname | to_json }}
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+discovery.type: single-node
+http.host: {{ ['127.0.0.1', lab_soc_management_ip, lab_soc_lab_ip] | to_json }}
+http.port: 9200
+transport.host: 127.0.0.1
+xpack.ml.enabled: false
+xpack.security.enabled: true
+xpack.security.autoconfiguration.enabled: false
+xpack.security.enrollment.enabled: false
+xpack.security.http.ssl.enabled: true
+xpack.security.http.ssl.certificate: /etc/elasticsearch/lab-tls/service.crt
+xpack.security.http.ssl.key: /etc/elasticsearch/lab-tls/service.key
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.verification_mode: full
+xpack.security.transport.ssl.certificate_authorities: [/etc/elasticsearch/lab-tls/ca.crt]
+xpack.security.transport.ssl.certificate: /etc/elasticsearch/lab-tls/service.crt
+xpack.security.transport.ssl.key: /etc/elasticsearch/lab-tls/service.key

@@ -1,0 +1,49 @@
+---
+- name: Generate the lab CA key
+  community.crypto.openssl_privatekey:
+    path: "{{ lab_pki_dir }}/ca.key"
+    size: 3072
+    mode: "0600"
+
+- name: Prepare the lab CA signing request
+  community.crypto.openssl_csr:
+    path: "{{ lab_pki_dir }}/ca.csr"
+    privatekey_path: "{{ lab_pki_dir }}/ca.key"
+    common_name: Kali Purple Lab CA
+    use_common_name_for_san: false
+    basic_constraints:
+      - "CA:TRUE"
+      - "pathlen:0"
+    basic_constraints_critical: true
+    key_usage:
+      - keyCertSign
+      - cRLSign
+    key_usage_critical: true
+    mode: "0600"
+
+- name: Generate the lab CA certificate
+  community.crypto.x509_certificate:
+    path: "{{ lab_ca_local_path }}"
+    csr_path: "{{ lab_pki_dir }}/ca.csr"
+    privatekey_path: "{{ lab_pki_dir }}/ca.key"
+    provider: selfsigned
+    selfsigned_not_before: "-1d"
+    selfsigned_not_after: "+1825d"
+    mode: "0644"
+
+- name: Issue a server certificate for each SOC service
+  ansible.builtin.include_tasks: pki_service.yml
+  loop:
+    - name: elasticsearch
+      subject_alt_names:
+        - IP:127.0.0.1
+        - "IP:{{ lab_soc_management_ip }}"
+        - "IP:{{ lab_soc_lab_ip }}"
+      usages: [serverAuth, clientAuth]
+    - name: kibana
+      subject_alt_names:
+        - "IP:{{ lab_soc_management_ip }}"
+      usages: [serverAuth]
+  loop_control:
+    loop_var: lab_pki_service
+    label: "{{ lab_pki_service.name }}"

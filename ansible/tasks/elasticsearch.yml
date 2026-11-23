@@ -1,0 +1,106 @@
+---
+- name: Set the Elasticsearch virtual memory limit
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/90-kali-purple-lab-elasticsearch.conf
+    content: "vm.max_map_count = 1048576\n"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Read the current virtual memory limit
+  ansible.builtin.command: sysctl -n vm.max_map_count
+  changed_when: false
+  register: lab_vm_max_map_count
+
+- name: Apply the virtual memory limit for the running kernel
+  ansible.builtin.command: sysctl -p /etc/sysctl.d/90-kali-purple-lab-elasticsearch.conf
+  changed_when: true
+  when: lab_vm_max_map_count.stdout | int < 1048576
+
+- name: Install Elasticsearch TLS assets
+  ansible.builtin.import_tasks: service_tls.yml
+  vars:
+    lab_tls_service: elasticsearch
+    lab_tls_restart_handler: Restart Elasticsearch
+
+- name: Configure single-node Elasticsearch
+  ansible.builtin.template:
+    src: elasticsearch.yml.j2
+    dest: /etc/elasticsearch/elasticsearch.yml
+    owner: root
+    group: elasticsearch
+    mode: "0640"
+  notify: Restart Elasticsearch
+
+- name: Set the Elasticsearch heap
+  ansible.builtin.copy:
+    dest: /etc/elasticsearch/jvm.options.d/90-kali-purple-lab.options
+    content: |
+      -Xms{{ lab_es_heap }}
+      -Xmx{{ lab_es_heap }}
+    owner: root
+    group: elasticsearch
+    mode: "0640"
+  notify: Restart Elasticsearch
+
+- name: Create the Elasticsearch secure settings store if necessary
+  ansible.builtin.command:
+    argv: [/usr/share/elasticsearch/bin/elasticsearch-keystore, create]
+    creates: /etc/elasticsearch/elasticsearch.keystore
+  environment:
+    ES_PATH_CONF: /etc/elasticsearch
+
+- name: List existing Elasticsearch secure settings
+  ansible.builtin.command:
+    argv: [/usr/share/elasticsearch/bin/elasticsearch-keystore, list]
+  environment:
+    ES_PATH_CONF: /etc/elasticsearch
+  changed_when: false
+  register: lab_es_keystore
+
+- name: Check for an initialized Elasticsearch data directory
+  ansible.builtin.stat:
+    path: /var/lib/elasticsearch/_state
+  register: lab_es_existing_state
+
+- name: Configure the transient password for an uninitialized cluster
+  ansible.builtin.command:
+    argv: [/usr/share/elasticsearch/bin/elasticsearch-keystore, add, --force, --stdin, bootstrap.password]
+    stdin: "{{ lab_bootstrap_password }}"
+  environment:
+    ES_PATH_CONF: /etc/elasticsearch
+  no_log: true
+  changed_when: true
+  when: not lab_es_existing_state.stat.exists
+  register: lab_es_bootstrap_setting
+  notify: Restart Elasticsearch
+
+- name: Set the secure settings file permissions
+  ansible.builtin.file:
+    path: /etc/elasticsearch/elasticsearch.keystore
+    owner: root
+    group: elasticsearch
+    mode: "0640"
+
+- name: Apply the Elasticsearch service configuration
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start Elasticsearch
+  ansible.builtin.systemd_service:
+    name: elasticsearch
+    enabled: true
+    state: started
+
+- name: Pass the Elasticsearch TLS health check
+  ansible.builtin.uri:
+    url: "{{ lab_es_local_url }}/"
+    ca_path: "{{ lab_ca_path }}"
+    use_proxy: false
+    status_code: 401
+  register: lab_es_health
+  until: lab_es_health.status == 401
+  retries: 60
+  delay: 3
+
+- name: Configure Elasticsearch users and lab indexes
+  ansible.builtin.import_tasks: elasticsearch_api.yml
