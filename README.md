@@ -82,6 +82,31 @@ terraform -chdir=terraform plan -destroy -out=lab-destroy.tfplan
 terraform -chdir=terraform apply lab-destroy.tfplan
 ```
 
+## Add the OPNsense gateway
+
+The optional routed lab adds Byzantium as an OPNsense VM. Heliotrope and the SOC retain their management interfaces for SSH and updates. Their telemetry interfaces connect to separate Proxmox bridges with no physical uplinks or host IP addresses. Byzantium connects only to these two bridges.
+
+Upload an [official OPNsense AMD64 DVD image](https://docs.opnsense.org/manual/install.html#download-and-verification) to a Proxmox ISO datastore after verifying the image. Allocate a VM ID and a second isolated bridge. Put the following example in an ignored `terraform/routed.tfvars` file and substitute your own isolated addresses and identifiers. The example assumes the client already uses `198.51.100.12/24` on the original telemetry bridge.
+
+```hcl
+soc_lab_cidr = "203.0.113.11/24"
+opnsense = {
+  vm_id       = 6103
+  iso         = "local:iso/OPNsense-dvd-amd64.iso"
+  soc_bridge  = "vmbr21"
+  client_cidr = "198.51.100.1/24"
+  soc_cidr    = "203.0.113.1/24"
+}
+```
+
+Review the plan with `terraform -chdir=terraform plan -var-file=routed.tfvars -out=routed.tfplan` before applying. For a new lab, expect two Debian clones and the firewall VM. Export the inventory with the same command as the base lab.
+
+1. Install OPNsense from the Proxmox VGA console and set a new administrator password. Assign LAN to `vtnet0` (client) and WAN to `vtnet1` (SOC). Use the respective addresses shown by `terraform -chdir=terraform output -json opnsense_console`. Set static IPv4 on both sides with no default gateway, no IPv6, and no DHCP server. Disable private-network and bogon blocking on the isolated SOC-side interface. Use disabled outbound NAT so the SOC and Suricata see the real client address.
+2. From the client-side interface, permit TCP from the client telemetry IP to the SOC telemetry IP on ports `9200` (Filebeat) and `18080` (temporary HTTP fixture). Replace the default general LAN allow rules with the two narrow rules. Manage the firewall through its client-side web interface or the Proxmox console. If needed, use an SSH local forward via Heliotrope to reach the firewall's HTTPS interface from the controller.
+3. Run the base `ansible/site.yml` after verifying the guest SSH host keys. The playbook configures the Debian guests' static telemetry routes and the Filebeat TLS receiver on the Heliotrope telemetry address, port `6514`. Import `ansible/.local/pki/ca.crt` as a trusted CA in OPNsense and import `opnsense-syslog.crt` and `opnsense-syslog.key` from that directory as the OPNsense client certificate. Keep the private key on the controller and the lab firewall.
+4. Add [the lab rule](opnsense/kali-purple-fixture.rules) under `/usr/local/etc/suricata/rules/` on OPNsense, then enable Suricata in IDS mode on the client-side interface only. Enable EVE syslog output and configure an RFC 5424 TLS IPv4 remote logging destination for application `suricata` at level `info`. Use the Heliotrope telemetry IP and port `6514` and select the imported client certificate. Apply the changes. [OPNsense IDS settings](https://docs.opnsense.org/manual/ips.html) · [OPNsense remote logging settings](https://docs.opnsense.org/manual/settingsmenu.html#logging)
+5. Run `ansible/verify.yml` for the original journal fixture, then `ansible/verify-opnsense.yml` with the same inventory and SSH arguments. The second playbook starts a temporary HTTP listener on the SOC telemetry IP, sends the control and positive requests from Heliotrope, and checks for exactly one Suricata alert for the positive connection and none for the control. In Kibana Discover, use **Kali Purple lab logs** and filter by `event.dataset: kali_purple_lab.suricata` and `suricata.alert.signature_id: 9900101`.
+
 ## Remaining milestones
 
 First validate the VM lifecycle and alert flow on the intended Proxmox host. Record the host version, template digest, and measured resource use.

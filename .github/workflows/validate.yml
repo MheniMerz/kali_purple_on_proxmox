@@ -37,4 +37,4 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -r ansible/requirements.txt
       - run: ansible-galaxy collection install -r ansible/requirements.yml
-      - run: ansible-playbook --syntax-check ansible/site.yml ansible/verify.yml
+      - run: ansible-playbook --syntax-check ansible/site.yml ansible/verify.yml ansible/verify-opnsense.yml
