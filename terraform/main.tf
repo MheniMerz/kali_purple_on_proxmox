@@ -45,6 +45,13 @@ resource "proxmox_vm_qemu" "lab" {
   boot                   = "order=scsi0"
   memory                 = each.value.size.memory_mb
 
+  # The provider reads unset startup and shutdown settings back as -1.
+  startup_shutdown {
+    order            = -1
+    shutdown_timeout = -1
+    startup_delay    = -1
+  }
+
   cpu {
     cores = each.value.size.cores
   }
