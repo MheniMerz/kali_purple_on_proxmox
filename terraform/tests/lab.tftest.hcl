@@ -111,3 +111,60 @@ run "reject_cleartext_api_endpoint" {
 
   expect_failures = [var.proxmox_api_url]
 }
+
+run "plan_opnsense_between_isolated_segments" {
+  command = plan
+
+  variables {
+    soc_lab_cidr = "203.0.113.11/24"
+    opnsense = {
+      vm_id       = 6103
+      iso         = "local:iso/OPNsense-dvd-amd64.iso"
+      soc_bridge  = "vmbr21"
+      client_cidr = "198.51.100.1/24"
+      soc_cidr    = "203.0.113.1/24"
+    }
+  }
+
+  assert {
+    condition = (
+      length(proxmox_vm_qemu.opnsense) == 1 &&
+      proxmox_vm_qemu.opnsense[0].vmid == 6103 &&
+      length(proxmox_vm_qemu.opnsense[0].network) == 2 &&
+      alltrue([
+        for nic in proxmox_vm_qemu.opnsense[0].network :
+        nic.bridge == (nic.id == 0 ? "vmbr20" : "vmbr21")
+      ]) &&
+      one([for nic in proxmox_vm_qemu.lab["client"].network : nic.bridge if nic.id == 1]) == "vmbr20" &&
+      one([for nic in proxmox_vm_qemu.lab["soc"].network : nic.bridge if nic.id == 1]) == "vmbr21"
+    )
+    error_message = "Only the firewall must connect to both telemetry bridges."
+  }
+
+  assert {
+    condition = (
+      output.ansible_inventory.all.children.soc.hosts.training-kali-purple.lab_gateway == "203.0.113.1" &&
+      output.ansible_inventory.all.children.soc.hosts.training-kali-purple.lab_remote_network == "198.51.100.0/24" &&
+      output.ansible_inventory.all.children.lab_clients.hosts.training-kali-heliotrope.lab_gateway == "198.51.100.1" &&
+      output.ansible_inventory.all.children.lab_clients.hosts.training-kali-heliotrope.lab_remote_network == "203.0.113.0/24"
+    )
+    error_message = "Export the firewall next hop and opposite telemetry subnet for both guests."
+  }
+}
+
+run "reject_firewall_bridge_bypass" {
+  command = plan
+
+  variables {
+    soc_lab_cidr = "203.0.113.11/24"
+    opnsense = {
+      vm_id       = 6103
+      iso         = "local:iso/OPNsense-dvd-amd64.iso"
+      soc_bridge  = "vmbr20"
+      client_cidr = "198.51.100.1/24"
+      soc_cidr    = "203.0.113.1/24"
+    }
+  }
+
+  expect_failures = [proxmox_vm_qemu.opnsense]
+}

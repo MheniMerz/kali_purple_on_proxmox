@@ -5,6 +5,7 @@ locals {
       id              = var.soc_vm_id
       management_cidr = var.soc_management_cidr
       lab_cidr        = var.soc_lab_cidr
+      lab_bridge      = var.opnsense == null ? var.lab_bridge : var.opnsense.soc_bridge
       size            = var.soc_vm_size
     }
     client = {
@@ -12,14 +13,20 @@ locals {
       id              = var.client_vm_id
       management_cidr = var.client_management_cidr
       lab_cidr        = var.client_lab_cidr
+      lab_bridge      = var.lab_bridge
       size            = var.client_vm_size
     }
   }
 
   management_network = cidrhost(var.soc_management_cidr, 0)
   management_prefix  = split("/", var.soc_management_cidr)[1]
-  lab_network        = cidrhost(var.soc_lab_cidr, 0)
-  lab_prefix         = split("/", var.soc_lab_cidr)[1]
+  lab_subnets = {
+    for role, guest in local.guests : role => {
+      address = split("/", guest.lab_cidr)[0]
+      network = cidrhost(guest.lab_cidr, 0)
+      prefix  = split("/", guest.lab_cidr)[1]
+    }
+  }
 }
 
 resource "proxmox_vm_qemu" "lab" {
@@ -94,7 +101,7 @@ resource "proxmox_vm_qemu" "lab" {
   network {
     id       = 1
     model    = "virtio"
-    bridge   = var.lab_bridge
+    bridge   = each.value.lab_bridge
     firewall = true
   }
 
@@ -135,18 +142,26 @@ resource "proxmox_vm_qemu" "lab" {
     precondition {
       condition = (
         var.soc_management_cidr != var.client_management_cidr &&
-        var.soc_lab_cidr != var.client_lab_cidr &&
-        "${cidrhost(var.client_management_cidr, 0)}/${split("/", var.client_management_cidr)[1]}" == "${local.management_network}/${local.management_prefix}" &&
-        "${cidrhost(var.client_lab_cidr, 0)}/${split("/", var.client_lab_cidr)[1]}" == "${local.lab_network}/${local.lab_prefix}"
+        "${cidrhost(var.client_management_cidr, 0)}/${split("/", var.client_management_cidr)[1]}" == "${local.management_network}/${local.management_prefix}"
       )
-      error_message = "Each bridge must have one shared subnet and different IP addresses for the two guests."
+      error_message = "The guests must have distinct addresses in the same management subnet."
     }
 
     precondition {
-      condition = (
-        cidrhost("${local.lab_network}/${local.management_prefix}", 0) != local.management_network &&
-        cidrhost("${local.management_network}/${local.lab_prefix}", 0) != local.lab_network
+      condition = var.opnsense != null || (
+        local.lab_subnets.client.address != local.lab_subnets.soc.address &&
+        local.lab_subnets.client.network == local.lab_subnets.soc.network &&
+        local.lab_subnets.client.prefix == local.lab_subnets.soc.prefix
       )
+      error_message = "Without OPNsense, the guests must have distinct addresses in the same lab subnet."
+    }
+
+    precondition {
+      condition = alltrue([
+        for subnet in values(local.lab_subnets) :
+        cidrhost("${subnet.network}/${local.management_prefix}", 0) != local.management_network &&
+        cidrhost("${local.management_network}/${subnet.prefix}", 0) != subnet.network
+      ])
       error_message = "The management and lab subnets must not overlap."
     }
 
