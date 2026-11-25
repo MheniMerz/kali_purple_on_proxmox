@@ -1,0 +1,13 @@
+[Unit]
+Description=Route the remote Kali Purple telemetry subnet through OPNsense
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/ip -4 route replace {{ lab_remote_network }} via {{ lab_gateway }} src {{ lab_address }} proto static
+ExecStop=-/usr/sbin/ip -4 route del {{ lab_remote_network }} via {{ lab_gateway }} proto static
+
+[Install]
+WantedBy=multi-user.target

@@ -11,3 +11,6 @@
 
 - name: Gather Debian guest facts
   ansible.builtin.setup:
+
+- name: Reconcile the route to the remote lab segment
+  ansible.builtin.import_tasks: lab_route.yml
