@@ -1,0 +1,1 @@
+alert http any any -> any 18080 (msg:"Kali Purple routed HTTP fixture"; flow:established,to_server; http.uri; content:"/kali-purple-positive?run="; startswith; sid:9900101; rev:1;)

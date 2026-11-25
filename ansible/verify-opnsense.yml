@@ -1,0 +1,151 @@
+---
+- name: Validate the lab inventory
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Check the Terraform inventory
+      ansible.builtin.import_tasks: tasks/inventory.yml
+
+- name: Verify a benign HTTP fixture through OPNsense
+  hosts: lab_clients
+  gather_facts: false
+  vars:
+    lab_fixture_port: 18080
+    lab_fixture_sid: 9900101
+    lab_fixture_script: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/files/http-fixture.py') }}"
+  tasks:
+    - name: Require the routed telemetry inventory
+      ansible.builtin.assert:
+        that:
+          - lab_gateway is defined
+          - hostvars[lab_soc_host].lab_gateway is defined
+        fail_msg: Export a fresh Terraform inventory with OPNsense enabled.
+
+    - name: Ask the client kernel how it reaches the SOC telemetry IP
+      ansible.builtin.command:
+        argv: [ip, -j, -4, route, get, "{{ lab_soc_lab_ip }}", from, "{{ lab_address }}"]
+      changed_when: false
+      register: lab_fixture_route
+
+    - name: Require the OPNsense next hop
+      ansible.builtin.assert:
+        that: (lab_fixture_route.stdout | from_json | first).gateway | default('') == lab_gateway
+
+    - name: Generate a unique ID for this HTTP fixture
+      ansible.builtin.set_fact:
+        lab_fixture_id: "{{ lookup('ansible.builtin.password', '/dev/null', length=24, chars=['ascii_lowercase', 'digits']) }}"
+
+    - name: Start the temporary HTTP listener on the SOC telemetry IP
+      ansible.builtin.command:
+        argv: [python3, -c, "{{ lab_fixture_script }}", serve, "{{ lab_soc_lab_ip }}"]
+      delegate_to: "{{ lab_soc_host }}"
+      async: 75
+      poll: 0
+      register: lab_fixture_server
+      changed_when: false
+
+    - name: Exercise the fixture
+      block:
+        - name: Wait for the SOC fixture listener
+          ansible.builtin.wait_for:
+            host: "{{ lab_soc_lab_ip }}"
+            port: "{{ lab_fixture_port }}"
+            timeout: 20
+          delegate_to: "{{ lab_soc_host }}"
+
+        - name: Send the control and positive requests from the client telemetry IP
+          ansible.builtin.command:
+            argv:
+              - python3
+              - -c
+              - "{{ lab_fixture_script }}"
+              - request
+              - "{{ lab_address }}"
+              - "{{ lab_soc_lab_ip }}"
+              - "{{ item }}"
+              - "{{ lab_fixture_id }}"
+          loop: [control, positive]
+          register: lab_fixture_requests
+          changed_when: false
+      always:
+        - name: Reap the temporary SOC HTTP listener
+          ansible.builtin.async_status:
+            jid: "{{ lab_fixture_server.ansible_job_id }}"
+          delegate_to: "{{ lab_soc_host }}"
+          register: lab_fixture_result
+          until: lab_fixture_result.finished
+          retries: 40
+          delay: 2
+          changed_when: false
+
+    - name: Verify the Suricata alerts for these two connections
+      delegate_to: "{{ lab_soc_host }}"
+      module_defaults:
+        ansible.builtin.uri:
+          method: POST
+          body_format: json
+          ca_path: "{{ lab_ca_path }}"
+          url_username: elastic
+          url_password: "{{ lab_elastic_password }}"
+          force_basic_auth: true
+          follow_redirects: none
+          use_proxy: false
+      vars:
+        lab_fixture_filter:
+          - term:
+              event.dataset: kali_purple_lab.suricata
+          - term:
+              suricata.alert.signature_id: "{{ lab_fixture_sid }}"
+          - term:
+              suricata.src_ip.keyword: "{{ lab_address }}"
+          - term:
+              suricata.dest_ip.keyword: "{{ lab_soc_lab_ip }}"
+          - term:
+              suricata.dest_port: "{{ lab_fixture_port }}"
+          - range:
+              '@timestamp':
+                gte: now-10m
+      block:
+        - name: Wait for the positive Suricata alert
+          ansible.builtin.uri:
+            url: "{{ lab_es_local_url }}/{{ lab_log_index_pattern }}/_count"
+            body:
+              query:
+                bool:
+                  filter: "{{ lab_fixture_filter + [lab_fixture_source_port] }}"
+          vars:
+            lab_fixture_source_port:
+              term:
+                suricata.src_port: "{{ (lab_fixture_requests.results[1].stdout | from_json).source_port }}"
+          register: lab_fixture_positive
+          until: lab_fixture_positive.json.count | default(0) > 0
+          retries: 30
+          delay: 4
+          no_log: true
+
+        - name: Count the control connection alerts
+          ansible.builtin.uri:
+            url: "{{ lab_es_local_url }}/{{ lab_log_index_pattern }}/_count"
+            body:
+              query:
+                bool:
+                  filter: "{{ lab_fixture_filter + [lab_fixture_source_port] }}"
+          vars:
+            lab_fixture_source_port:
+              term:
+                suricata.src_port: "{{ (lab_fixture_requests.results[0].stdout | from_json).source_port }}"
+          register: lab_fixture_control
+          no_log: true
+
+        - name: Confirm the routed fixture results
+          ansible.builtin.assert:
+            that:
+              - lab_fixture_positive.json.count == 1
+              - lab_fixture_control.json.count == 0
+            success_msg: "HTTP fixture {{ lab_fixture_id }} crossed {{ lab_gateway }}. Suricata recorded one positive alert and zero control alerts."
+      rescue:
+        - name: Report the failed verification step
+          ansible.builtin.fail:
+            msg: "{{ ansible_failed_task.name }} failed for HTTP fixture {{ lab_fixture_id }}."
