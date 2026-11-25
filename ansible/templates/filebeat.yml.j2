@@ -11,6 +11,36 @@ filebeat.inputs:
           fields:
             dataset: kali_purple_lab.journald
 
+{% if lab_gateway is defined %}
+  - type: tcp
+    id: kali-purple-opnsense-eve
+    host: {{ (lab_address ~ ':6514') | to_json }}
+    network: tcp4
+    framing: rfc6587
+    max_message_size: 256KiB
+    ssl:
+      certificate: /etc/filebeat/lab-tls/service.crt
+      key: /etc/filebeat/lab-tls/service.key
+      certificate_authorities: [{{ lab_ca_path | to_json }}]
+      client_authentication: required
+    processors:
+      - syslog:
+          field: message
+          format: rfc5424
+      - decode_json_fields:
+          fields: [message]
+          target: suricata
+      - drop_event:
+          when:
+            not:
+              equals:
+                suricata.event_type: alert
+      - add_fields:
+          target: event
+          fields:
+            dataset: kali_purple_lab.suricata
+{% endif %}
+
 processors:
   - add_host_metadata:
       netinfo.enabled: false

@@ -47,3 +47,20 @@
   loop_control:
     loop_var: lab_pki_service
     label: "{{ lab_pki_service.name }}"
+
+- name: Issue the OPNsense syslog client and receiver certificates
+  ansible.builtin.include_tasks: pki_service.yml
+  loop:
+    - name: opnsense-syslog
+      subject_alt_names:
+        - DNS:byzantium
+      usages: [clientAuth]
+    - name: filebeat-syslog
+      subject_alt_names:
+        - "IP:{{ hostvars[groups['lab_clients'][0]].lab_address }}"
+        - DNS:lab-syslog
+      usages: [serverAuth]
+  loop_control:
+    loop_var: lab_pki_service
+    label: "{{ lab_pki_service.name }}"
+  when: hostvars[groups['lab_clients'][0]].lab_gateway is defined

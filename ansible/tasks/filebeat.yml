@@ -1,5 +1,28 @@
 ---
-- name: Configure Filebeat to send tagged journal entries over TLS
+- name: Install the TLS identity for the OPNsense log receiver
+  when: lab_gateway is defined
+  block:
+    - name: Create the private Filebeat TLS directory
+      ansible.builtin.file:
+        path: /etc/filebeat/lab-tls
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Copy the Filebeat receiver certificate and key
+      ansible.builtin.copy:
+        src: "{{ lab_pki_dir }}/filebeat-syslog.{{ item }}"
+        dest: "/etc/filebeat/lab-tls/service.{{ item }}"
+        owner: root
+        group: root
+        mode: "0600"
+      loop: [crt, key]
+      no_log: true
+      diff: false
+      notify: Restart Filebeat
+
+- name: Configure Filebeat inputs and TLS output
   ansible.builtin.template:
     src: filebeat.yml.j2
     dest: /etc/filebeat/filebeat.yml
